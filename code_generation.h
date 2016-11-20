@@ -151,32 +151,21 @@ struct OperatorBinary : public Operator {
 	}
 };
 
+struct OperatorHashJoin : public OperatorBinary {
+	OperatorHashJoin(const Context* context, stringstream& out, const vector<Field_Unit>& left_fields
+		, const vector<Field_Unit>& right_fields);
 
+	void consume(const Operator* caller);
+	void produce() {input->produce();}
 
-//
-//struct OperatorHashJoin : public OperatorBinary {
-//	vector<Field_Unit> left_fields;
-//	vector<Field_Unit> right_fields;
-//	vector<Field_Unit> required;
-//	vector<Field_Unit> produced;
-//	vector<TID_Unit> TIDs;
-//	string tuple_typename;
-//	string tuple_tids;
-//	string hash_name;
-//	//-------------
-//	OperatorHashJoin(const Context* context, stringstream& out) : OperatorBinary(context,out) {}
-//	void setFields(const vector<Field_Unit>& left_fields, const vector<Field_Unit>& right_fields) {
-//		this->left_fields = left_fields;
-//		this->right_fields = right_fields;
-//	}
-//	void computeRequired();
-//	void computeProduced();
-//	void computeTIDs();
-//	
-//	const vector<Field_Unit>* getRequired() const {return &required;}
-//	const vector<Field_Unit>* getProduced() const {return &produced;}
-//	const vector<TID_Unit>* getTIDs() const {return &TIDs;}
-//	
-//	void consume(const Operator* caller);
-//	void produce();
-//};
+protected:
+	vector<Field_Unit> left_fields;
+	vector<Field_Unit> right_fields;
+	string hash_name;
+	string iterator_name;
+	string hash_insert;
+	string hash_definition;
+
+	void computeRequired();
+	void computeProduced();
+};

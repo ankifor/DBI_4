@@ -185,132 +185,137 @@ void OperatorSelect::consume(const Operator* caller) {
 // OperatorHashJoin
 //==============================================================================
 
-//struct OperatorHashJoin : public OperatorBinary {
-//	vector<Field_Unit> left_fields;
-//	vector<Field_Unit> right_fields;
-//	vector<Field_Unit> required;
-//	vector<Field_Unit> produced;
-//	vector<TID_Unit> TIDs;
-//};
+OperatorHashJoin::OperatorHashJoin(
+	const Context* context, stringstream& out
+	, const vector<Field_Unit>& left_fields
+	, const vector<Field_Unit>& right_fields
+) : OperatorBinary(context, out), left_fields(left_fields), right_fields(right_fields)
+{
+	hash_name = name_generator.request_name("hash", true);
+	iterator_name = name_generator.request_name("it", true);
+}
 
-//void OperatorHashJoin::produce(){
-//	computeRequired();
-//	string delim ;
-////	using type_wdc = tuple<Integer,Integer,Integer>;//w_id,d_id,c_id
-////	unordered_map<type_wdc,Tid,hash_types::hash<type_wdc>> customer_wdc;
-//	tuple_typename = name_generator.request_name("type_tuple");
-//	tuple_tids = name_generator.request_name("type_tids");
-//	hash_name = name_generator.request_name("hash");
-//	// tuple_typename definition
-//	out << "using " << tuple_typename << "=tuple<";
-//	delim = "";
-//	for (auto t : left_fields) {
-//		out << delim << type(context->getAttr(t.tab,t.attr));
-//		delim = ",";
-//	}
-//	out << ">;";
-//	// tuple_tids definition
-//	out << "using " << tuple_tids << "=tuple<";
-//	delim = "";
-//	for (auto t : *left->getTIDs()) {
-//		out << delim << "Tid";
-//		delim = ",";
-//	}
-//	out << ">;";
-//	// unordered_multimap definition	
-//	out << "unordered_multimap<" 
-//	<< tuple_typename 
-//	<< "," << tuple_tids 
-//	<< "," << "hash_types::hash<" << tuple_typename << ">> " 
-//	<< hash_name << ";";
-//	
-//	left->produce();
-//	right->produce();
-//}
-//
-//void OperatorHashJoin::computeRequired() {
-//	required = *consumer->getRequired();
-//	for (const Field_Unit& t : left_fields) {
-//		auto it = find(required.cbegin(), required.cend(), t);
-//		if (it == required.end()) required.push_back(t);
-//	}
-//	for (const Field_Unit& t : right_fields) {
-//		auto it = find(required.cbegin(), required.cend(), t);
-//		if (it == required.end()) required.push_back(t);
-//	}
-//	OperatorBinary::computeRequired();
-//}
-//
-//void OperatorHashJoin::computeProduced() {
-//	OperatorBinary::computeProduced();
-//	produced = *left->getProduced();
-//	
-//	for (const Field_Unit& t : *right->getProduced()) {
-//		auto it = find(produced.cbegin(), produced.cend(), t);
-//		if (it == produced.end()) produced.push_back(t);
-//	}
-//}
-//
-//void OperatorHashJoin::computeTIDs() {
-//	OperatorBinary::computeTIDs();
-//	TIDs = *left->getTIDs();
-//	for (auto t : *right->getTIDs()) {
-//		TIDs.push_back(t);
-//	}
-//}
-//
-//void OperatorHashJoin::consume(const Operator* caller){
-//	string delim = "";
-//	if (caller == left) {
-//		//auto t = make_tuple(customer.c_w_id[tid1], customer.c_d_id[tid1], customer.c_id[tid2]);
-//		out << "auto t = make_tuple(";
-//		delim = "";
-//		auto TIDs_left = *left->getTIDs();
-//		for (auto t : left_fields) {
-//			auto it = find_if(TIDs_left.begin(), TIDs_left.end(), TabPredicate<TID_Unit>(t.tab));
-//			assert(it != TIDs_left.end());
-//			out << delim 
-//				<< context->getTabName(t.tab) 
-//				<< "." << context->getAttr(t.tab,t.attr).name
-//				<< "[" << it->name << "]";
-//			delim = ",";
-//		}
-//		out << ");";
-//		//auto t_tids = make_tuple(tid1,tid2);
-//		out << "auto t_tids = make_tuple(";
-//		delim = "";
-//		for (auto t : TIDs_left) {
-//			out << delim << t.name;
-//			delim = ",";
-//		}
-//		out << ");";
-//		//customer_wdc.insert(make_pair(t,t_tids));
-//		out << hash_name << ".insert(make_pair(t,t_tids));";
-//	} else {
-//		//auto t = make_tuple(order.o_w_id[tid], order.o_d_id[tid], order.o_c_id[tid]);
-//		out << "auto t = make_tuple(";
-//		delim = "";
-//		auto TIDs_right = *right->getTIDs();
-//		for (auto t : right_fields) {
-//			auto it = find_if(TIDs_right.begin(), TIDs_right.end(), TabPredicate<TID_Unit>(t.tab));
-//			assert(it != TIDs_right.end());
-//			out << delim 
-//				<< context->getTabName(t.tab) 
-//				<< "." << context->getAttr(t.tab,t.attr).name
-//				<< "[" << it->name << "]";
-//			delim = ",";
-//		}
-//		out << ");";
-//		//auto it = customer_wdc.find(t);
-//		out << "for(auto it = " << hash_name << ".equal_range(t);"
-//			<< "it.first != it.second;"
-//			<< "++it.first) {";
-//		auto TIDs_left = *left->getTIDs();
-//		for (size_t i = 0; i < TIDs_left.size(); ++i) {
-//			out << "auto " << TIDs_left[i].name 
-//				<< "= get<" << i << ">(it.first->second);";
-//		}
-//		consumer->consume(this);
-//		out << "}";
-//	}
-//}
+void OperatorHashJoin::computeRequired() {
+	required = consumer->getRequired();
+	//add fields from left if needed
+	for (auto f : left_fields) {
+		auto it = find(required.begin(), required.end(), f);
+		if (it == required.end()) {
+			required.push_back(f);
+		}
+	}
+	//add fields from right if needed
+	for (auto f : right_fields) {
+		auto it = find(required.begin(), required.end(), f);
+		if (it == required.end()) {
+			required.push_back(f);
+		}
+	}
+}
+
+void OperatorHashJoin::computeProduced() {
+	size_t ind = 0;	
+	auto produced_left = left->getProduced();
+	hash_insert = hash_name + ".insert(make_pair(";
+	// process key of hash_table
+	{
+		string type_key = name_generator.request_name("type_key", true);
+		string it_key = iterator_name + ".first->first";
+		hash_definition += "using " + type_key + "=tuple<";
+		hash_insert += "make_tuple(";
+		
+		ind = 0;
+		delim = "";
+		for (auto f : left_fields) {
+			auto it = find(produced_left.begin(),produced_left.end(),f);
+			produced.push_back(*it);
+			produced.back().token = "get<" + (ind++) + ">(" + it_key + ");"
+			
+			hash_definition += delim + it->type_name;
+			hash_insert += delim + it->token;
+			delim = ",";
+		}
+		hash_definition += ">;";//close type_key definition
+		hash_insert += ")";//close make_tuple()
+	}
+	hash_insert += ",";
+	// process value of hash_table
+	{
+		string it_val = iterator_name + ".first->second";
+		string type_val = name_generator.request_name("type_val", true);
+		
+		hash_definition += "using " + type_val << "=tuple<";
+		hash_insert += "make_tuple(";
+		
+		ind = 0;
+		delim = "";
+		for (auto f : produced_left) {
+			auto it = find(left_fields.begin(),left_fields.end(),f);
+			if (it != left_fields.end()) continue;
+			
+			produced.push_back(f);
+			produced.back().token = "get<" + (ind++) + ">(" + it_val + ");"
+			
+			hash_definition += delim + f.type_name;
+			hash_insert += delim + f.token;
+			delim = ",";
+		}
+		hash_definition += ">;";//close type_val definition
+		hash_insert += ")";//close make_tuple()
+	}
+	hash_insert += "));";//close insert
+	//define multimap
+	hash_definition += 
+		"unordered_multimap<" 
+		+ type_key 
+		+ "," + type_val 
+		+ "," + "hash_types::hash<" + type_key + ">> "
+		+ hash_name + ";";
+	// add fields from right without change
+	for (auto f : right->getProduced()) {
+		auto it = find(produced.begin(), produced.end(), f);
+		assert(it == produced.end());
+		produced.push_back(f);
+	}
+}
+
+void OperatorHashJoin::produce(){
+	out << hash_definition;
+	// produce
+	left->produce();
+	right->produce();
+}
+
+
+void OperatorHashJoin::consume(const Operator* caller){
+	string delim = "";
+	if (caller == left) {
+		out << hash_insert;
+	} else {//TODO
+		//auto t = make_tuple(order.o_w_id[tid], order.o_d_id[tid], order.o_c_id[tid]);
+		out << "auto t = make_tuple(";
+		delim = "";
+		auto TIDs_right = *right->getTIDs();
+		for (auto t : right_fields) {
+			auto it = find_if(TIDs_right.begin(), TIDs_right.end(), TabPredicate<TID_Unit>(t.tab));
+			assert(it != TIDs_right.end());
+			out << delim 
+				<< context->getTabName(t.tab) 
+				<< "." << context->getAttr(t.tab,t.attr).name
+				<< "[" << it->name << "]";
+			delim = ",";
+		}
+		out << ");";
+		//auto it = customer_wdc.find(t);
+		out << "for(auto it = " << hash_name << ".equal_range(t);"
+			<< "it.first != it.second;"
+			<< "++it.first) {";
+		auto TIDs_left = *left->getTIDs();
+		for (size_t i = 0; i < TIDs_left.size(); ++i) {
+			out << "auto " << TIDs_left[i].name 
+				<< "= get<" << i << ">(it.first->second);";
+		}
+		consumer->consume(this);
+		out << "}";
+	}
+}
