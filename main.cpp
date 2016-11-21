@@ -18,17 +18,6 @@ using namespace std;
 //extern Table_stock stock;
 string create_query(Schema* schema) {
 	Context context(*schema);
-	context.tab_instances = {
-		 {"warehouse", 0}
-		,{"district",1}
-		,{"customer",2}
-		,{"history",3}
-		,{"neworder",4}
-		,{"order",5}
-		,{"orderline",6}
-		,{"item",7}
-		,{"stock",8}
-	};
 	stringstream out;
 	
 	out << "#include \"Types.hpp\""   << endl;
@@ -37,69 +26,46 @@ string create_query(Schema* schema) {
 	out << "#include <unordered_map>" << endl;
 	out << "using namespace std;"     << endl;
 	out << "bool pred(const Varchar<16>& s) {return s.len > 0 && s.value[0]=='B';}";
-	out << "bool pred1(const Integer& a0, const Varchar<10>& a1) {return a0>=3 || (a1.len>0 && a1.value[0]=='2');}";
+	//out << "bool pred1(const Integer& a0, const Varchar<10>& a1) {return a0>=3 || (a1.len>0 && a1.value[0]=='2');}";
 	out << "void run_query() {" << endl;
 	
-	OperatorScan scanWarehouse(&context, out, "warehouse");
-	OperatorSelect select(&context, out, {
-		{
-			 {"warehouse","w_id"}
-			,{"warehouse","w_name"}
-		},"pred1"
-	});
+	OperatorScan scanCust(&context, out, "customer");
+//and c_id = 322
+//and c_w_id = 1
+//and c_d_id = 1
+	OperatorSelect select(&context, out, {"pred",{
+		{"c_last"}
+	}});
+	
+	OperatorScan scanOrder(&context, out, "order");
+	OperatorHashJoin join1(&context, out, 
+		 {{"c_w_id"},{"c_d_id"},{"c_id"  }}
+		,{{"o_w_id"},{"o_d_id"},{"o_c_id"}}
+	);
+	
+	OperatorScan scanOrdeline(&context, out, "orderline");
+	OperatorHashJoin join2(&context, out, 
+		 {{"o_w_id" },{"o_d_id" },{"o_id"   }}
+		,{{"ol_w_id"},{"ol_d_id"},{"ol_o_id"}}
+	);
+	
 	OperatorProjection proj(&context, out, {
-		 {"warehouse","w_city"}
-		,{"warehouse","w_id"}
-		,{"warehouse","w_ytd"}
+		 {"c_first"}
+		,{"c_last"}
+		,{"o_all_local"}
+		,{"ol_amount"}
 	});
-	OperatorProjection proj2(&context, out, {
-		 {"warehouse","w_id"}
-		,{"warehouse","w_ytd"}
-	});	
+
 	OperatorPrint print(&context, out);
-	
-	proj.setInput(&scanWarehouse);
-	select.setInput(&proj);
-	proj2.setInput(&select);
-	print.setInput(&proj2);
+
+	print.setInput(&proj);
+	proj.setInput(&join2);
+	join2.setInput(&join1, &scanOrdeline);
+	join1.setInput(&select, &scanOrder);
+	select.setInput(&scanCust);
+
 	print.produce();
-	
-//	OperatorScan scanCust(&context, out);
-//	OperatorScan scanOrder(&context, out);
-//	OperatorScan scanOl(&context, out);
-//	OperatorSelect selectCust(&context, out);
-//	OperatorPrint printData(&context, out);
-//	OperatorProjection projectFields(&context, out);
-//	OperatorHashJoin hjCustOrder(&context, out);
-//	OperatorHashJoin hjCustOrderOl(&context, out);
-//	
-//	printData.setInput(&projectFields);
-//	projectFields.setInput(&hjCustOrderOl);
-//	hjCustOrderOl.setInput(&hjCustOrder,&scanOl);
-//	hjCustOrder.setInput(&selectCust,&scanOrder);
-//	selectCust.setInput(&scanCust);
-//	
-//	scanCust.assignTable(2);
-//	scanOrder.assignTable(5);
-//	scanOl.assignTable(6);
-//	selectCust.setFieldComparison({2,5},"pred");
-//	hjCustOrderOl.setFields(
-//		 {{5,2},{5,1},{5,0}}
-//		,{{6,2},{6,1},{6,0}});
-//	hjCustOrder.setFields(
-//		 {{2,2},{2,1},{2,0}}
-//		,{{5,2},{5,1},{5,3}});
-//	//c_first, c_last, o_all_local, ol_amount 
-//	projectFields.setFields({{2,3},{2,5},{5,7},{6,8}});
-//	
-//	printData.computeProduced();
-//	printData.computeRequired();
-//	printData.computeTIDs();
-//	
-//	projectFields.check();
-//
-//	printData.produce();
-	
+
 	out << "}" << endl;
 	return out.str();
 }

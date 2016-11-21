@@ -21,6 +21,12 @@ struct AttrPredicate {
 	bool operator()(const Schema::Relation::Attribute& t) const { return t.name == name; }
 };
 
+struct RelPredicate {
+	string name;
+	RelPredicate(string name) : name(name) {}
+	bool operator()(const Schema::Relation& r) const { return r.name == name; }
+};
+
 class Name_Generator {
 	unordered_map<string,size_t> used_names;
 public:
@@ -39,24 +45,24 @@ public:
 } name_generator;
 
 
-void remove_not_required_fields(vector<Field_Unit>& produced, const vector<Field_Unit>& required) {
-	for (auto it = produced.begin(); it != produced.end(); ) {
-		auto it_req = find(required.begin(), required.end(), *it);
-		if (it_req == required.end()) {
-			// not found => not required
-			it = produced.erase(it);
-		} else {
-			++it;
-		}
-	}
-}
-
-void check_produced_for_required_fields(const vector<Field_Unit>& produced, const vector<Field_Unit>& required) {
-	for (auto it = required.begin(); it != required.end(); ++it) {
-		auto it_prod = find(produced.begin(), produced.end(), *it);
-		assert(it_prod != produced.end());
-	}
-}
+//void remove_not_required_fields(vector<Field_Unit>& produced, const vector<Field_Unit>& required) {
+//	for (auto it = produced.begin(); it != produced.end(); ) {
+//		auto it_req = find(required.begin(), required.end(), *it);
+//		if (it_req == required.end()) {
+//			// not found => not required
+//			it = produced.erase(it);
+//		} else {
+//			++it;
+//		}
+//	}
+//}
+//
+//void check_produced_for_required_fields(const vector<Field_Unit>& produced, const vector<Field_Unit>& required) {
+//	for (auto it = required.begin(); it != required.end(); ++it) {
+//		auto it_prod = find(produced.begin(), produced.end(), *it);
+//		assert(it_prod != produced.end());
+//	}
+//}
 
 
 //==============================================================================
@@ -64,11 +70,11 @@ void check_produced_for_required_fields(const vector<Field_Unit>& produced, cons
 //==============================================================================
 
 const Schema::Relation* Context::getTabDef(string tabname) const {
-	auto it = tab_instances.find(tabname);
-	if (it == tab_instances.end()) {
+	auto it = find_if(schema.relations.begin(), schema.relations.end(), RelPredicate(tabname));
+	if (it == schema.relations.end()) {
 		return nullptr;
 	}
-	return &schema.relations[it->second];
+	return &(*it);
 }
 
 const Schema::Relation::Attribute* Context::getAttr(const Field_Unit& fu) const {
@@ -94,25 +100,22 @@ OperatorScan::OperatorScan(const Context* context, stringstream& out, string tab
 }
 		
 void OperatorScan::computeProduced() {
-	produced = getRequired();
+	
 	auto def = *context->getTabDef(tabname);
 	
-	for (auto it = produced.begin(); it != produced.end(); ) {
-		if (it->tab_name.empty()) {
-			it->tab_name = tabname;
-		}
-		assert(it->tab_name == tabname);
+	for (auto it = fields.begin(); it != fields.end(); ) {
 		auto it_tab = find_if(def.attributes.begin(), def.attributes.end(), AttrPredicate(it->field_name));
-		if (it_tab == def.attributes.end()) {
+		if (it_tab == def.attributes.end() || !it->tab_name.empty() && it->tab_name != tabname) {
 			// not present in table
-			it = produced.erase(it);
+			it = fields.erase(it);
 		} else {
+			it->tab_name = tabname;
 			it->type_name = type(*it_tab);
 			it->token = it->tab_name + "." + it->field_name + "[" + tid_name + "]";
 			++it;
 		}
 	}
-	assert(produced.size() > 0);
+	assert(fields.size() > 0);
 }
 
 void OperatorScan::produce() {
@@ -128,12 +131,12 @@ void OperatorScan::produce() {
 // OperatorPrint
 //==============================================================================
 
-void OperatorPrint::consume(const Operator*) {
+void OperatorPrint::consume(const Operator* caller) {
 	auto produced = input->getProduced();	
 	out << "cout<<";
 	string delim = "";
-	for (const Field_Unit& fu : produced) {
-		out << delim << fu.token << "<<";
+	for (auto& f : produced) {
+		out << delim << f.token << "<<";
 		delim = "\",\"<<";
 	}
 	out << "endl;";
@@ -143,10 +146,16 @@ void OperatorPrint::consume(const Operator*) {
 // OperatorProjection
 //==============================================================================
 void OperatorProjection::computeProduced() {
-	produced = input->getProduced();
-	remove_not_required_fields(produced, getRequired());
-	check_produced_for_required_fields(produced, fields);
-	assert(produced.size() == fields.size());
+	auto produced = input->getProduced();
+	for (auto it = fields.begin(); it != fields.end(); ) {
+		auto it_prod = find(produced.begin(), produced.end(), *it);
+		if (it_prod == produced.end()) {
+			assert(false);//should not happen
+		} else {
+			*it = *it_prod;
+			++it;
+		}
+	}
 }
 
 
@@ -154,23 +163,36 @@ void OperatorProjection::computeProduced() {
 // OperatorSelect
 //==============================================================================
 void OperatorSelect::computeRequired() {
-	required = consumer->getRequired();
+	fields = consumer->getRequired();
 	//add fields from conditions, if needed
-	for (auto f : condition.fields) {
-		auto it = find(required.begin(), required.end(), f);
-		if (it == required.end()) {
-			required.push_back(f);
+	for (auto& f : condition.fields) {
+		auto it = find(fields.begin(), fields.end(), f);
+		if (it == fields.end()) {
+			fields.push_back(f);
+		}
+	}
+}
+
+void OperatorSelect::computeProduced() {
+	auto produced = input->getProduced();
+	for (auto it = fields.begin(); it != fields.end(); ) {
+		auto it_prod = find(produced.begin(), produced.end(), *it);
+		if (it_prod == produced.end()) {
+			it = fields.erase(it);//not produced
+		} else {
+			*it = *it_prod;
+			++it;
 		}
 	}
 }
 
 void OperatorSelect::consume(const Operator* caller) {
-	auto pr = getProduced();
+	auto produced = getProduced();
 	out << "if (" << condition.predicat << "(";
 	string delim = "";
-	for (auto f : condition.fields) {
-		auto it = find(pr.begin(), pr.end(), f);
-		assert(it != pr.end());
+	for (auto& f : condition.fields) {
+		auto it = find(produced.begin(), produced.end(), f);
+		assert(it != produced.end());
 		out << delim << it->token;
 		delim = ",";
 	}
@@ -196,126 +218,145 @@ OperatorHashJoin::OperatorHashJoin(
 }
 
 void OperatorHashJoin::computeRequired() {
-	required = consumer->getRequired();
+	fields = consumer->getRequired();
 	//add fields from left if needed
-	for (auto f : left_fields) {
-		auto it = find(required.begin(), required.end(), f);
-		if (it == required.end()) {
-			required.push_back(f);
+	for (const auto& f : left_fields) {
+		auto it = find(fields.begin(), fields.end(), f);
+		if (it == fields.end()) {
+			fields.push_back(f);
 		}
 	}
 	//add fields from right if needed
-	for (auto f : right_fields) {
-		auto it = find(required.begin(), required.end(), f);
-		if (it == required.end()) {
-			required.push_back(f);
+	for (const auto& f : right_fields) {
+		auto it = find(fields.begin(), fields.end(), f);
+		if (it == fields.end()) {
+			fields.push_back(f);
 		}
 	}
 }
 
 void OperatorHashJoin::computeProduced() {
-	size_t ind = 0;	
-	auto produced_left = left->getProduced();
-	hash_insert = hash_name + ".insert(make_pair(";
-	// process key of hash_table
-	{
-		string type_key = name_generator.request_name("type_key", true);
-		string it_key = iterator_name + ".first->first";
-		hash_definition += "using " + type_key + "=tuple<";
-		hash_insert += "make_tuple(";
-		
-		ind = 0;
-		delim = "";
-		for (auto f : left_fields) {
-			auto it = find(produced_left.begin(),produced_left.end(),f);
-			produced.push_back(*it);
-			produced.back().token = "get<" + (ind++) + ">(" + it_key + ");"
-			
-			hash_definition += delim + it->type_name;
-			hash_insert += delim + it->token;
-			delim = ",";
+	size_t ind_val = 0;
+	string it_key_name = iterator_name + ".first->first";
+	string it_val_name = iterator_name + ".first->second";
+	// refresh fields from left without change
+	auto& produced_left = left->getProduced();
+	for (auto& f : fields) {
+		auto it = find(produced_left.begin(), produced_left.end(), f);
+		if (it != produced_left.end()) {
+			f = *it;
+			auto it_key = find(left_fields.begin(), left_fields.end(), f);
+			if (it_key != left_fields.end()) {
+				f.token = "get<" + to_string(distance(left_fields.begin(), it_key)) + ">(" + it_key_name + ")";
+			} else {
+				f.token = "get<" + to_string(ind_val++) + ">(" + it_val_name + ")";
+			}
 		}
-		hash_definition += ">;";//close type_key definition
-		hash_insert += ")";//close make_tuple()
 	}
-	hash_insert += ",";
-	// process value of hash_table
-	{
-		string it_val = iterator_name + ".first->second";
-		string type_val = name_generator.request_name("type_val", true);
-		
-		hash_definition += "using " + type_val << "=tuple<";
-		hash_insert += "make_tuple(";
-		
-		ind = 0;
-		delim = "";
-		for (auto f : produced_left) {
-			auto it = find(left_fields.begin(),left_fields.end(),f);
-			if (it != left_fields.end()) continue;
-			
-			produced.push_back(f);
-			produced.back().token = "get<" + (ind++) + ">(" + it_val + ");"
-			
-			hash_definition += delim + f.type_name;
-			hash_insert += delim + f.token;
-			delim = ",";
+	// refresh fields from right without change
+	auto& produced_right = right->getProduced();
+	for (auto& f : fields) {
+		auto it = find(produced_right.begin(), produced_right.end(), f);
+		if (it != produced_right.end()) {
+			f = *it;
 		}
-		hash_definition += ">;";//close type_val definition
-		hash_insert += ")";//close make_tuple()
 	}
-	hash_insert += "));";//close insert
-	//define multimap
-	hash_definition += 
-		"unordered_multimap<" 
-		+ type_key 
-		+ "," + type_val 
-		+ "," + "hash_types::hash<" + type_key + ">> "
-		+ hash_name + ";";
-	// add fields from right without change
-	for (auto f : right->getProduced()) {
-		auto it = find(produced.begin(), produced.end(), f);
-		assert(it == produced.end());
-		produced.push_back(f);
-	}
+	// delete fileds without token
+	for (auto it = fields.begin(); it != fields.end(); ) {
+		if (it->token.empty()) {
+			it = fields.erase(it);//not produced
+		} else {
+			++it;
+		}
+	}	
 }
 
 void OperatorHashJoin::produce(){
-	out << hash_definition;
-	// produce
+	string delim;
+	auto& produced = left->getProduced();
+	//key definition
+	string type_key = name_generator.request_name("type_key", true);
+	{
+		out << "using " << type_key << "=tuple<";
+		delim = "";
+		for (const auto& f : left_fields) {
+			auto it = find(produced.begin(),produced.end(),f);
+			out << delim << it->type_name;
+			delim = ",";
+		}
+		out << ">;";
+	}
+	//value definition
+	string type_val = name_generator.request_name("type_val", true);
+	{
+		out << "using " << type_val << "=tuple<";
+		delim = "";
+		for (const auto& f : produced) {
+			auto it = find(left_fields.begin(),left_fields.end(),f);
+			if (it == left_fields.end()) {
+				out << delim << f.type_name;
+				delim = ",";
+			}
+		}
+		out << ">;";
+	}
+	//hash definition
+	out << "unordered_multimap<" 
+		<< type_key 
+		<< "," << type_val 
+		<< "," << "hash_types::hash<" + type_key + ">> "
+		<< hash_name << ";";
+	//call produce of children
 	left->produce();
 	right->produce();
 }
 
-
-void OperatorHashJoin::consume(const Operator* caller){
+void OperatorHashJoin::consumeLeft() {
 	string delim = "";
-	if (caller == left) {
-		out << hash_insert;
-	} else {//TODO
-		//auto t = make_tuple(order.o_w_id[tid], order.o_d_id[tid], order.o_c_id[tid]);
-		out << "auto t = make_tuple(";
+	auto& produced = left->getProduced();
+	
+	out << hash_name << ".insert(make_pair(";
+	{
+		out << "make_tuple(";
 		delim = "";
-		auto TIDs_right = *right->getTIDs();
-		for (auto t : right_fields) {
-			auto it = find_if(TIDs_right.begin(), TIDs_right.end(), TabPredicate<TID_Unit>(t.tab));
-			assert(it != TIDs_right.end());
-			out << delim 
-				<< context->getTabName(t.tab) 
-				<< "." << context->getAttr(t.tab,t.attr).name
-				<< "[" << it->name << "]";
+		for (const auto& f : left_fields) {
+			auto it = find(produced.begin(),produced.end(),f);
+			out << delim << it->token;
 			delim = ",";
 		}
-		out << ");";
-		//auto it = customer_wdc.find(t);
-		out << "for(auto it = " << hash_name << ".equal_range(t);"
-			<< "it.first != it.second;"
-			<< "++it.first) {";
-		auto TIDs_left = *left->getTIDs();
-		for (size_t i = 0; i < TIDs_left.size(); ++i) {
-			out << "auto " << TIDs_left[i].name 
-				<< "= get<" << i << ">(it.first->second);";
-		}
-		consumer->consume(this);
-		out << "}";
+		out << ")";
 	}
+	out << ",";
+	{
+		out << "make_tuple(";
+		delim = "";
+		for (const auto& f : produced) {
+			auto it = find(left_fields.begin(),left_fields.end(),f);
+			if (it == left_fields.end()) {
+				out << delim << f.token;
+				delim = ",";
+			}
+		}		
+		out << ")";
+	}
+	out << "));";
+}
+
+void OperatorHashJoin::consumeRight() {
+	string delim = "";
+	auto& produced = right->getProduced();
+	out << "auto " << iterator_name << "="
+		<< hash_name << ".equal_range(make_tuple(";
+	{
+		delim = "";
+		for (const auto& f : right_fields) {
+			auto it = find(produced.begin(),produced.end(),f);
+			out << delim << it->token;
+			delim = ",";
+		}
+	}
+	out << "));";
+	out << "while (" << iterator_name << ".first != " << iterator_name << ".second){";
+	consumer->consume(this);
+	out << "++" << iterator_name << ".first;}";
 }

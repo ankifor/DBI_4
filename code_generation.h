@@ -8,22 +8,21 @@
 using namespace std;
 
 struct Field_Unit {
-	string tab_name;
 	string field_name;
+	string tab_name;
 	string token;
 	string type_name;
 	bool operator==(const Field_Unit& t) const {
-		return t.field_name == field_name && t.tab_name == tab_name;
+		return t.field_name == field_name && (tab_name.empty() || t.tab_name.empty() || t.tab_name == tab_name);
 	}
 };
 
 struct Field_Comparison {
-	vector<Field_Unit> fields;
 	string predicat;//predicat(fields(0),fields(1),...,fields(n))
+	vector<Field_Unit> fields;
 };
 
 struct Context {
-	unordered_map<string, size_t> tab_instances;//should be set from outside
 	Schema schema;
 	Context(Schema& schema) {this->schema = schema;}
 	const Schema::Relation* getTabDef(string tabname) const;
@@ -42,15 +41,19 @@ public:
 			computeRequired();
 			computeRequiredFinished = true;
 		}
-		return required;
+		return fields;
 	}
 	
 	const vector<Field_Unit>& getProduced() {
+		if (!computeRequiredFinished) {
+			computeRequired();
+			computeRequiredFinished = true;
+		}
 		if (!computeProducedFinished) {
 			computeProduced();
 			computeProducedFinished = true;
 		}
-		return produced;
+		return fields;
 	}
 	
 	virtual void consume(const Operator* caller) = 0;
@@ -63,11 +66,11 @@ protected:
 	Operator* consumer;
 	stringstream& out;
 	
-	vector<Field_Unit> required;
+	vector<Field_Unit> fields;
+	
 	bool computeRequiredFinished = false;
 	virtual void computeRequired() = 0;
 	
-	vector<Field_Unit> produced;
 	bool computeProducedFinished = false;
 	virtual void computeProduced() = 0;
 	
@@ -91,7 +94,7 @@ protected:
 	string tabname;
 	string tid_name;
 	
-	void computeRequired() {required = consumer->getRequired();}
+	void computeRequired() {fields = consumer->getRequired();}
 	void computeProduced();
 };
 
@@ -103,22 +106,20 @@ struct OperatorPrint : public OperatorUnary {
 	
 protected:
 	void computeRequired() {/*nothing to do here*/}
-	void computeProduced() {produced = input->getProduced();}
+	void computeProduced() {fields = input->getProduced();}
 };
 
 
 struct OperatorProjection : public OperatorUnary {
-	vector<Field_Unit> fields;
-	//-------------
 	OperatorProjection(const Context* context, stringstream& out, const vector<Field_Unit>& fields) 
 		: OperatorUnary(context,out)
-		, fields(fields) {}
+		 {this->fields = fields;}
 
 	void consume(const Operator* caller) {consumer->consume(this);}
 	void produce() {input->produce();}
 	
 protected:
-	void computeRequired() {required = fields;}
+	void computeRequired() {/*nothing to do*/}
 	void computeProduced();
 };
 
@@ -134,7 +135,7 @@ protected:
 	Field_Comparison condition;
 	
 	void computeRequired();
-	void computeProduced() {produced = input->getProduced();}
+	void computeProduced();
 };
 
 
@@ -149,23 +150,33 @@ struct OperatorBinary : public Operator {
 		this->left = left; left->setConsumer(this);
 		this->right=right; right->setConsumer(this);
 	}
+	void consume(const Operator* caller) {
+		if (caller == left) {
+			consumeLeft();
+		} else {
+			consumeRight();
+		}
+	}
+
+protected:
+	virtual void consumeLeft() = 0;
+	virtual void consumeRight() = 0;
 };
 
 struct OperatorHashJoin : public OperatorBinary {
 	OperatorHashJoin(const Context* context, stringstream& out, const vector<Field_Unit>& left_fields
 		, const vector<Field_Unit>& right_fields);
-
-	void consume(const Operator* caller);
-	void produce() {input->produce();}
+	void produce();
 
 protected:
 	vector<Field_Unit> left_fields;
 	vector<Field_Unit> right_fields;
 	string hash_name;
 	string iterator_name;
-	string hash_insert;
-	string hash_definition;
 
 	void computeRequired();
 	void computeProduced();
+	
+	void consumeLeft();
+	void consumeRight();
 };
